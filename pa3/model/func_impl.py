@@ -65,21 +65,30 @@ def get_info(
 
     # Get the mp_idx, dp_idx from rank, mp_size and dp_size (you may not need to use all three of them)
 
-    ...
+    dp_idx = rank // mp_size
+    mp_idx = rank % mp_size
 
     # Get the model/data parallel communication groups
     # the model/data parallel communication group is required to apply mpi operations within the scope of the group
     # Hint: try to figure out the relationship between the mp_idx, dp_idx with the mp/dp communication group
     #       and use the comm.Split() function to get the corresponding group.
 
-    ...
-
+    dp_comm = comm.Split(key=rank, color=mp_idx)
+    mp_comm = comm.Split(key=rank, color=dp_idx)
     # Derive the part_in_dim and part_out_dim depend on is_fc1 and is_megatron_mp
 
-    ...
+    if is_fc1:
+        part_in_dim = in_dim
+        part_out_dim = out_dim // mp_size
+    else:
+        if is_megatron_mp:
+            part_in_dim = in_dim // mp_size
+            part_out_dim = out_dim
+        else:
+            part_in_dim = in_dim
+            part_out_dim = out_dim // mp_size
 
-    raise NotImplementedError
-
+    return mp_idx, dp_idx, mp_comm, dp_comm, part_in_dim, part_out_dim
 
 def naive_collect_forward_input(
     x: np.ndarray,
@@ -111,12 +120,21 @@ def naive_collect_forward_input(
     # Note: you may want to ensure that the source variable and destination variable in your mpi func call should
     #       have the same data type, otherwise you will not collect the correct value.
 
+    src_dtype = x.dtype
+    a, b = x.shape
     # Hint: Try to figure out the way MPI calls deal with the destination memory layout for 2d matrix transfer, this might
     #       might not align with your expected layout. In order to get the correct layout, you may wish to use some NumPy
     #       functions (np.split and np.concatenate might be helpful).
+    # collected_x = np.empty((a, b * mp_size), src_dtype)
+    # for i in range(a):
+    #     mp_comm.Allgather(x[i], collected_x[i])
 
-    raise NotImplementedError
+    # Rank major approach
+    temp = np.empty((mp_size, a, b), src_dtype)
+    mp_comm.Allgather(x, temp)
 
+    collected_x = temp.transpose(1, 0, 2).reshape(a, b * mp_size)
+    return collected_x
 
 def naive_collect_forward_output(
     out: np.ndarray,
